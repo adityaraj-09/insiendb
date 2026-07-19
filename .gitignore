@@ -1,0 +1,15 @@
+# Binaries
+mini_sql
+minisql-server
+storage_engine_test
+btree_test
+wal_debug
+
+# Database / WAL files
+*.db
+*.db-wal
+
+# Build / OS junk
+*.o
+*.d
+.DS_Store
