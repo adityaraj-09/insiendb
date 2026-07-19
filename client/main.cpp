@@ -12,19 +12,19 @@ void printUsage(const char* prog) {
         "Usage: " << prog << " [options] [database-file]\n"
         "\n"
         "Options:\n"
-        "  --host HOST    connect to minisql-server (remote REPL)\n"
+        "  --host HOST    connect to insiendb-server (remote REPL)\n"
         "  --port PORT    server port (default 54321)\n"
         "  --new          create a fresh database (local mode only)\n"
         "  -h, --help     show this help\n"
         "\n"
         "Local mode (default): opens database file and runs embedded REPL.\n"
-        "Remote mode (--host): sends SQL to minisql-server over wire protocol.\n";
+        "Remote mode (--host): sends SQL to insiendb-server over wire protocol.\n";
 }
 
 } // namespace
 
 int main(int argc, char** argv) {
-    std::string dbPath = "minisql.db";
+    std::string dbPath = "insien.db";
     std::string host;
     uint16_t port = 54321;
     bool forceNew = false;

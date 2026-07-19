@@ -40,12 +40,12 @@ COMMON_SRC = $(PARSER_SRC) $(SQL_SRC) $(STORAGE_SRC)
 
 .PHONY: all clean test smoke
 
-all: mini_sql minisql-server
+all: insiendb insiendb-server
 
-mini_sql: $(CLIENT_SRC) $(COMMON_SRC)
+insiendb: $(CLIENT_SRC) $(COMMON_SRC)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@
 
-minisql-server: $(SERVER_SRC) $(COMMON_SRC)
+insiendb-server: $(SERVER_SRC) $(COMMON_SRC)
 	$(CXX) $(CXXFLAGS) $(INCLUDES) $^ -o $@
 
 storage_engine_test: tests/storage_engine_test.cpp $(STORAGE_SRC) sql/value.cpp sql/catalog.cpp
@@ -55,8 +55,8 @@ test: storage_engine_test
 	./storage_engine_test
 
 # Quick SQL smoke test through the embedded REPL (non-interactive).
-smoke: mini_sql
-	rm -f /tmp/minisql_smoke.db /tmp/minisql_smoke.db-wal
+smoke: insiendb
+	rm -f /tmp/insien_smoke.db /tmp/insien_smoke.db-wal
 	printf '%s\n' \
 		'CREATE TABLE t (id INT, name TEXT);' \
 		"INSERT INTO t VALUES (1, 'alice');" \
@@ -64,8 +64,8 @@ smoke: mini_sql
 		'CREATE INDEX idx_t_id ON t (id);' \
 		'SELECT * FROM t WHERE id = 1;' \
 		'.quit' \
-		| ./mini_sql --new /tmp/minisql_smoke.db
+		| ./insiendb --new /tmp/insien_smoke.db
 
 clean:
-	rm -f mini_sql minisql-server storage_engine_test
-	rm -f *.db *.db-wal /tmp/minisql_*.db /tmp/minisql_*.db-wal
+	rm -f insiendb insiendb-server storage_engine_test
+	rm -f *.db *.db-wal /tmp/insien_*.db /tmp/insien_*.db-wal

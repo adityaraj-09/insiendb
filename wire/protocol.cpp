@@ -182,7 +182,7 @@ void Connection::sendStartup() {
     std::vector<uint8_t> body;
     appendInt32BE(body, 196608);
     appendCString(body, "user");
-    appendCString(body, "minisql");
+    appendCString(body, "insiendb");
     body.push_back(0);
 
     std::vector<uint8_t> packet;

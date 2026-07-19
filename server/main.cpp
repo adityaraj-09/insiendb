@@ -81,7 +81,7 @@ void handleClient(int clientFd) {
 } // namespace
 
 int main(int argc, char** argv) {
-    std::string dbPath = "minisql.db";
+    std::string dbPath = "insien.db";
     std::string bindHost = "127.0.0.1";
     uint16_t port = 54321;
     bool forceNew = false;
@@ -157,7 +157,7 @@ int main(int argc, char** argv) {
     std::signal(SIGINT, onSignal);
     std::signal(SIGTERM, onSignal);
 
-    std::cout << "minisql-server listening on " << bindHost << ":" << port
+    std::cout << "insiendb-server listening on " << bindHost << ":" << port
               << "  database: " << g_storage.path() << "\n";
 
     while (g_running) {

@@ -62,7 +62,7 @@ static Row sampleRow() {
 // --- Milestone 1: Page + DiskManager ---
 
 static void testDiskManager() {
-    std::string path = "/tmp/minisql_disk_test.db";
+    std::string path = "/tmp/insien_disk_test.db";
     fs::remove(path);
 
     DiskManager dm;
@@ -153,7 +153,7 @@ static void testHeapPageInMemory() {
 }
 
 static void testHeapPageOnDisk() {
-    std::string path = "/tmp/minisql_heap_test.db";
+    std::string path = "/tmp/insien_heap_test.db";
     fs::remove(path);
 
     DiskManager dm;
@@ -212,7 +212,7 @@ static void testFreelistPageFormat() {
 }
 
 static void testFreelistReuse() {
-    std::string path = "/tmp/minisql_freelist_test.db";
+    std::string path = "/tmp/insien_freelist_test.db";
     fs::remove(path);
 
     Storage storage;
@@ -248,7 +248,7 @@ static void testFreelistReuse() {
 }
 
 static void testWalCrashRecovery() {
-    std::string path = "/tmp/minisql_wal_test.db";
+    std::string path = "/tmp/insien_wal_test.db";
     fs::remove(path);
     fs::remove(path + "-wal");
 
@@ -422,7 +422,7 @@ static void testBTreePageFormat() {
 }
 
 static void testStorageCreateIndex() {
-    std::string path = "/tmp/minisql_index_test.db";
+    std::string path = "/tmp/insien_index_test.db";
     fs::remove(path);
     fs::remove(path + "-wal");
 
@@ -463,7 +463,7 @@ static void testStorageCreateIndex() {
 }
 
 static void testStorageTextIndex() {
-    std::string path = "/tmp/minisql_text_index_test.db";
+    std::string path = "/tmp/insien_text_index_test.db";
     fs::remove(path);
     fs::remove(path + "-wal");
 
@@ -529,7 +529,7 @@ static void testHeapPageUpdate() {
 }
 
 static void testIncrementalDmlWithIndex() {
-    std::string path = "/tmp/minisql_incremental_dml.db";
+    std::string path = "/tmp/insien_incremental_dml.db";
     fs::remove(path);
     fs::remove(path + "-wal");
 

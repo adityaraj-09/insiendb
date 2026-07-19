@@ -1,6 +1,6 @@
 # Binaries
-mini_sql
-minisql-server
+insiendb
+insiendb-server
 storage_engine_test
 btree_test
 wal_debug

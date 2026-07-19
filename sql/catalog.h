@@ -19,7 +19,7 @@ struct TableSchema {
     std::string name;
     std::vector<ColumnSchema> columns;
 
-    // Linear search is fine — mini-DB tables have a handful of columns.
+    // Linear search is fine — insiendb tables have a handful of columns.
     // Returns nullptr if not found.
     const ColumnSchema* findColumn(const std::string& colName) const;
 };

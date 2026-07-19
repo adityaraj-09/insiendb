@@ -19,7 +19,7 @@ struct WalRecord {
     Page page; // valid for PAGE_WRITE
 };
 
-// Append-only write-ahead log (minisql.db-wal).
+// Append-only write-ahead log (insien.db-wal).
 // Page-level records: log full page image BEFORE it hits the db file.
 class WalManager {
 public:

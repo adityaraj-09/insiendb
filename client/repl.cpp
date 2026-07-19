@@ -150,7 +150,7 @@ bool handleDotCommand(const std::string& line, bool remote,
 }
 
 bool readInputLine(std::string& buffer, std::string& line) {
-    std::cout << (buffer.empty() ? "minisql> " : "      ...> ");
+    std::cout << (buffer.empty() ? "insiendb> " : "      ...> ");
     std::cout.flush();
     if (!std::getline(std::cin, line)) {
         std::cout << "\n";
@@ -165,7 +165,7 @@ bool readInputLine(std::string& buffer, std::string& line) {
 void runRepl(Storage& storage, Catalog& catalog) {
     Session session(storage);
 
-    std::cout << "miniSQL — type .help for commands, .quit to exit\n";
+    std::cout << "insiendb — type .help for commands, .quit to exit\n";
     std::cout << "database: " << storage.path() << " (local)\n\n";
 
     std::string buffer;
@@ -197,7 +197,7 @@ void runRemoteRepl(const std::string& host, uint16_t port) {
         return;
     }
 
-    std::cout << "miniSQL — connected to " << host << ":" << port << " (remote)\n";
+    std::cout << "insiendb — connected to " << host << ":" << port << " (remote)\n";
     std::cout << "type .help for commands, .quit to exit\n\n";
 
     std::string buffer;

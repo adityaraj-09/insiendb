@@ -1,6 +1,6 @@
-# miniSQL
+# insiendb
 
-A small SQL database engine written in C++17. It stores everything in a single page-oriented `.db` file, with a write-ahead log (WAL), slotted heap pages for rows, and B+ trees for secondary indexes.
+**insiendb** is a small SQL database engine written in C++17. It stores everything in a single page-oriented `insien.db` file, with a write-ahead log (`insien.db-wal`), slotted heap pages for rows, and B+ trees for secondary indexes.
 
 ```
 SQL → Lexer → Parser → Semantic Analyzer → Executor → Storage
@@ -15,7 +15,7 @@ SQL → Lexer → Parser → Semantic Analyzer → Executor → Storage
 ## Build & run
 
 ```bash
-make all      # mini_sql + minisql-server
+make all      # insiendb + insiendb-server
 make test     # storage engine suite (155 checks)
 make smoke    # quick CREATE / INSERT / INDEX / SELECT
 make clean
@@ -24,15 +24,15 @@ make clean
 **Local REPL**
 
 ```bash
-./mini_sql --new my.db          # create fresh DB
-./mini_sql my.db                # open existing
+./insiendb --new insien.db          # create fresh DB
+./insiendb insien.db                # open existing
 ```
 
 **Client / server**
 
 ```bash
-./minisql-server --new --port 54321 server.db
-./mini_sql --host 127.0.0.1 --port 54321
+./insiendb-server --new --port 54321 insien.db
+./insiendb --host 127.0.0.1 --port 54321
 ```
 
 Dot-commands in the REPL: `.help`, `.tables`, `.schema`, `.info`, `.quit`
@@ -42,13 +42,13 @@ Dot-commands in the REPL: `.help`, `.tables`, `.schema`, `.info`, `.quit`
 ## Repository layout
 
 ```
-miniSQLparsr/
-├── client/            # mini_sql entry + interactive REPL
+insiendb/
+├── client/            # insiendb entry + interactive REPL
 ├── parser/            # lexer, tokens, AST, recursive-descent parser
 ├── sql/               # catalog, semantic analysis, executor, session, values
 ├── storage/           # Storage facade (SQL ↔ disk)
 ├── storage_engine/    # pages, disk I/O, heap, freelist, WAL, B-tree, catalogs
-├── server/            # minisql-server (TCP)
+├── server/            # insiendb-server (TCP)
 ├── wire/              # Postgres-inspired wire protocol
 ├── tests/             # storage_engine_test
 └── Makefile
@@ -62,14 +62,14 @@ Two files per database:
 
 | File | Role |
 |------|------|
-| `name.db` | Main database — fixed **8192-byte** pages |
-| `name.db-wal` | Append-only write-ahead log |
+| `insien.db` | Main database — fixed **8192-byte** pages |
+| `insien.db-wal` | Append-only write-ahead log |
 
 Everything is little-endian unless noted (wire protocol uses big-endian lengths).
 
 ```
 ┌─────────────────────────────────────────────────────────┐
-│  name.db                                                │
+│  insien.db                                              │
 │  ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐   │
 │  │ Page 0   │ │ Page 1   │ │ Page 2   │ │   ...    │   │
 │  │ header   │ │ HEAP /   │ │ BTRE /   │ │          │   │
@@ -200,12 +200,12 @@ Page 0’s `freelist_head` points at the first free page (`0` = empty). Allocate
 
 ## Write-ahead log (WAL)
 
-File: `<dbpath>-wal`
+File: `insien.db-wal` (generally `<dbpath>-wal`)
 
 Every durable page write goes through `savePage()`:
 
 1. Append a full **page image** to the WAL and fsync
-2. Write the page into `name.db`
+2. Write the page into `insien.db`
 
 On open, if a WAL exists, all `PAGE_WRITE` records are replayed, then a checkpoint truncates the WAL.
 
