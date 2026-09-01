@@ -364,7 +364,7 @@ INSERT INTO users VALUES (42, 'Ada');
 ```bash
 make test
 # Storage engine tests (milestones 1–3 + freelist + WAL + btree + indexes)
-# Expected: storage engine suite, 0 failed
+# Expected: 173 checks, 0 failed
 ```
 
 ---
