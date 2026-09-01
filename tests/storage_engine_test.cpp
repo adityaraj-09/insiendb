@@ -126,6 +126,7 @@ static void testHeapPageInMemory() {
     Page page;
     HeapPage::init(page);
     CHECK(HeapPage::isHeapPage(page));
+    CHECK(HeapPage::pageLsn(page) == 0);
     CHECK(HeapPage::slotCount(page) == 0);
     CHECK(HeapPage::liveRowCount(page) == 0);
 
@@ -278,6 +279,154 @@ static void testWalCrashRecovery() {
     fs::remove(path);
     fs::remove(path + "-wal");
     std::cout << "  wal: crash recovery replayed page writes OK\n";
+}
+
+static TableSchema eventsSchema() {
+    TableSchema schema;
+    schema.name = "events";
+    schema.columns = {ColumnSchema{"id", Type::INT, 0}, ColumnSchema{"msg", Type::TEXT, 1}};
+    return schema;
+}
+
+static void testWalLsnSurvivesCheckpoint() {
+    std::string path = "/tmp/insien_wal_lsn_test.db";
+    fs::remove(path);
+    fs::remove(path + "-wal");
+
+    LSN lsnAfterCreate = 0;
+    {
+        Storage storage;
+        storage.createDatabase(path);
+        storage.createTable(eventsSchema());
+        storage.insertRow("events", {Value::makeInt(1), Value::makeText("boot")});
+        lsnAfterCreate = storage.walNextLsn();
+        CHECK(lsnAfterCreate > 1);
+        storage.closeDatabase();
+    }
+
+    {
+        Storage storage;
+        storage.openDatabase(path);
+        CHECK(storage.walRedoLsn() > 0);
+        CHECK(storage.walNextLsn() == lsnAfterCreate);
+        CHECK(storage.walNextLsn() > storage.walRedoLsn());
+        storage.closeDatabase();
+    }
+
+    fs::remove(path);
+    fs::remove(path + "-wal");
+    std::cout << "  wal: LSN is monotonic across checkpoint OK\n";
+}
+
+static void testWalHeapFpiThenRedo() {
+    std::string path = "/tmp/insien_wal_fpi_test.db";
+    fs::remove(path);
+    fs::remove(path + "-wal");
+
+    {
+        Storage storage;
+        storage.createDatabase(path);
+        storage.createTable(eventsSchema());
+        storage.insertRow("events", {Value::makeInt(1), Value::makeText("keep")});
+        storage.closeDatabase();
+    }
+
+    {
+        Storage storage;
+        storage.openDatabase(path);
+        storage.insertRow("events", {Value::makeInt(2), Value::makeText("second")});
+        storage.insertRow("events", {Value::makeInt(3), Value::makeText("third")});
+        storage.abandonWithoutCheckpoint();
+    }
+
+    {
+        WalManager wal;
+        wal.open(path + "-wal");
+        auto records = wal.readAllRecords();
+        std::vector<WalRecord> inserts;
+        for (const auto& rec : records) {
+            if (rec.type == WalRecordType::HEAP_INSERT)
+                inserts.push_back(rec);
+        }
+        CHECK(inserts.size() == 2);
+        CHECK(inserts[0].hasFpi());
+        CHECK(!inserts[1].hasFpi());
+        CHECK(inserts[1].payload.size() < PAGE_SIZE);
+        wal.close();
+    }
+
+    {
+        Storage storage;
+        storage.openDatabase(path);
+        auto rows = storage.scanTable("events");
+        CHECK(rows.size() == 3);
+        CHECK(std::get<long long>(rows[1][0].data) == 2);
+        CHECK(std::get<long long>(rows[2][0].data) == 3);
+        storage.closeDatabase();
+    }
+
+    fs::remove(path);
+    fs::remove(path + "-wal");
+    std::cout << "  wal: first heap touch after checkpoint logs FPI, later redo only OK\n";
+}
+
+static void testWalHeapUpdateDeleteReplay() {
+    std::string path = "/tmp/insien_wal_dml_test.db";
+    fs::remove(path);
+    fs::remove(path + "-wal");
+
+    RowId firstRid{};
+    {
+        Storage storage;
+        storage.createDatabase(path);
+        storage.createTable(eventsSchema());
+        storage.insertRow("events", {Value::makeInt(1), Value::makeText("old")});
+        storage.insertRow("events", {Value::makeInt(2), Value::makeText("keep")});
+        storage.scanTableWithRids("events", [&](RowId rid, const Row& row) {
+            if (row[0].type == Type::INT && std::get<long long>(row[0].data) == 1)
+                firstRid = rid;
+        });
+        storage.closeDatabase();
+    }
+
+    {
+        Storage storage;
+        storage.openDatabase(path);
+        CHECK(storage.updateRow("events", firstRid,
+                                {Value::makeInt(1), Value::makeText("new")}));
+        storage.scanTableWithRids("events", [&](RowId rid, const Row& row) {
+            if (row[0].type == Type::INT && std::get<long long>(row[0].data) == 2)
+                CHECK(storage.deleteRow("events", rid));
+        });
+        storage.abandonWithoutCheckpoint();
+    }
+
+    {
+        WalManager wal;
+        wal.open(path + "-wal");
+        bool sawUpdate = false, sawDelete = false;
+        for (const auto& rec : wal.readAllRecords()) {
+            if (rec.type == WalRecordType::HEAP_UPDATE) sawUpdate = true;
+            if (rec.type == WalRecordType::HEAP_DELETE) sawDelete = true;
+        }
+        CHECK(sawUpdate);
+        CHECK(sawDelete);
+        wal.close();
+    }
+
+    {
+        Storage storage;
+        storage.openDatabase(path);
+        auto rows = storage.scanTable("events");
+        CHECK(rows.size() == 1);
+        CHECK(std::get<long long>(rows[0][0].data) == 1);
+        CHECK(std::get<std::string>(rows[0][1].data) == "new");
+        storage.closeDatabase();
+    }
+
+    fs::remove(path);
+    fs::remove(path + "-wal");
+    std::cout << "  wal: heap UPDATE/DELETE redo recovered after crash OK\n";
 }
 
 static void testIndexKey() {
@@ -590,6 +739,9 @@ int main() {
         testFreelistPageFormat();
         testFreelistReuse();
         testWalCrashRecovery();
+        testWalLsnSurvivesCheckpoint();
+        testWalHeapFpiThenRedo();
+        testWalHeapUpdateDeleteReplay();
         testIndexKey();
         testIndexKeyTypes();
         testBTreePageFormat();

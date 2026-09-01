@@ -151,7 +151,8 @@ Classic slotted-page layout inside 8 KiB:
 ```
 ┌──────────────────────────────────────────────────────────┐
 │ Header (16 bytes)                                        │
-│  magic u32 | num_slots u16 | data_end u16 | next_page u32│
+│  magic u32 | num_slots u16 | data_end u16                │
+│  next_page u32 | page_lsn u32                            │
 ├──────────────────────────────────────────────────────────┤
 │ Row bytes grow UPWARD from offset 16                     │
 │   [row0][row1][row2]...                                  │
@@ -200,27 +201,39 @@ Page 0’s `freelist_head` points at the first free page (`0` = empty). Allocate
 
 ## Write-ahead log (WAL)
 
-File: `insien.db-wal` (generally `<dbpath>-wal`)
+File: `insien.db-wal` (generally `<dbpath>-wal`), format **v2**.
 
-Every durable page write goes through `savePage()`:
+Heap mutations log small **redo** records (insert / update / delete / init / set-next). A full 8 KiB page image is attached only on the **first modification of that heap page after the last checkpoint** (`page.lsn <= redoLsn`) — the same full-page-write rule as PostgreSQL. B-tree pages, freelist pages, and page 0 still go through `savePage()` as a full `PAGE_WRITE`.
 
-1. Append a full **page image** to the WAL and fsync
-2. Write the page into `insien.db`
+Durable heap change:
 
-On open, if a WAL exists, all `PAGE_WRITE` records are replayed, then a checkpoint truncates the WAL.
+1. Apply the mutation in memory
+2. If `page.lsn <= redoLsn`, attach a **post-image** of the page
+3. Set `page.lsn` to this record’s LSN, append the WAL record, fsync
+4. Write the page into `insien.db`
+
+On open, WAL records are replayed: an attached image replaces the page; otherwise redo is applied. Records whose page already has `page.lsn >= record.lsn` are skipped. Then a checkpoint truncates the WAL. LSNs keep increasing across checkpoints (`nextLsn` / `redoLsn` live in the WAL header).
 
 **WAL file layout**
 
 ```
-[32-byte header: magic "WAL1", version, page_size, reserved]
+[32-byte header: magic "WAL1", version=2, page_size, reserved,
+                 next_lsn u64, redo_lsn u64]
 [records...]
   each record:
     [body_len: u32]
-    [type: u8]          1 = PAGE_WRITE, 2 = CHECKPOINT
+    [type: u8]          1=PAGE_WRITE 2=CHECKPOINT
+                        3=HEAP_INIT 4=HEAP_INSERT 5=HEAP_DELETE
+                        6=HEAP_UPDATE 7=HEAP_SET_NEXT
     [lsn: u64]
-    [payload]
-      PAGE_WRITE → page_id u32 + 8192-byte page image
-      CHECKPOINT → (empty)
+    [flags: u8]         bit 0 = full page image attached
+    [page_id: u32]
+    [optional 8192-byte page image]
+    [redo payload]
+      HEAP_INSERT / HEAP_UPDATE → slot u16 + len u16 + row bytes
+      HEAP_DELETE               → slot u16
+      HEAP_SET_NEXT             → next_page u32
+      HEAP_INIT / CHECKPOINT / PAGE_WRITE → (empty)
 ```
 
 `abandonWithoutCheckpoint()` closes without checkpointing — used in tests to simulate a crash.
@@ -342,7 +355,7 @@ INSERT INTO users VALUES (42, 'Ada');
 2. Find last HEAP page in the table chain (or allocate from freelist / grow file)
 3. Insert into slotted page → get `RowId (page, slot)`
 4. For each index on `users`, encode key and B+ tree `insert(key, rid)`
-5. Every page mutation: WAL append + fsync, then write `.db` page
+5. Heap mutation: redo WAL record (+ FPI if first touch since checkpoint), fsync, then write `.db` page. Other page kinds still log a full image.
 
 ---
 
@@ -351,7 +364,7 @@ INSERT INTO users VALUES (42, 'Ada');
 ```bash
 make test
 # Storage engine tests (milestones 1–3 + freelist + WAL + btree + indexes)
-# Expected: 155 checks, 0 failed
+# Expected: storage engine suite, 0 failed
 ```
 
 ---

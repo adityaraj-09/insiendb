@@ -8,6 +8,7 @@ void HeapPage::init(Page& page) {
     page.writeU16(OFF_NUM_SLOTS, 0);
     page.writeU16(OFF_DATA_END, static_cast<uint16_t>(HEADER_SIZE));
     page.writeU32(OFF_NEXT_PAGE, 0);
+    page.writeU32(OFF_PAGE_LSN, 0);
 }
 
 bool HeapPage::isHeapPage(const Page& page) {
@@ -20,6 +21,41 @@ PageId HeapPage::nextPage(const Page& page) {
 
 void HeapPage::setNextPage(Page& page, PageId next) {
     page.writeU32(OFF_NEXT_PAGE, next);
+}
+
+LSN HeapPage::pageLsn(const Page& page) {
+    return page.readU32(OFF_PAGE_LSN);
+}
+
+void HeapPage::setPageLsn(Page& page, LSN lsn) {
+    if (lsn > 0xFFFFFFFFull)
+        throw std::runtime_error("HeapPage: page LSN does not fit in header u32");
+    page.writeU32(OFF_PAGE_LSN, static_cast<uint32_t>(lsn));
+}
+
+void HeapPage::applyLoggedInsert(Page& page, uint16_t slotIndex,
+                                 const uint8_t* rowBytes, size_t rowLen) {
+    uint16_t numSlots = page.readU16(OFF_NUM_SLOTS);
+    if (slotIndex < numSlots && isLiveSlot(page, slotIndex))
+        return;
+    if (slotIndex == numSlots) {
+        auto got = insert(page, rowBytes, rowLen);
+        if (!got.has_value() || *got != slotIndex)
+            throw std::runtime_error("HeapPage: redo insert failed or slot mismatch");
+        return;
+    }
+    if (slotIndex > numSlots)
+        throw std::out_of_range("HeapPage: redo insert skipped a slot");
+
+    if (rowLen > 0xFFFF)
+        throw std::runtime_error("HeapPage: redo insert row too large");
+    uint16_t dataEnd = page.readU16(OFF_DATA_END);
+    size_t slotDir = slotDirectoryBytes(numSlots);
+    if (static_cast<size_t>(dataEnd) + rowLen + slotDir > PAGE_SIZE)
+        throw std::runtime_error("HeapPage: redo insert does not fit");
+    page.writeBytes(dataEnd, rowBytes, rowLen);
+    writeSlot(page, slotIndex, dataEnd, static_cast<uint16_t>(rowLen));
+    page.writeU16(OFF_DATA_END, static_cast<uint16_t>(dataEnd + rowLen));
 }
 
 size_t HeapPage::slotOffset(uint16_t slotIndex) {

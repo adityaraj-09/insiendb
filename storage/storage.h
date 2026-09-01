@@ -53,6 +53,7 @@ public:
     PageId pageCount() const { return disk.pageCount(); }
     PageId freelistHead() const { return boot.freelistHead; }
     LSN walNextLsn() const { return wal.nextLsn(); }
+    LSN walRedoLsn() const { return wal.redoLsn(); }
 
 private:
     DiskManager disk;
@@ -69,7 +70,14 @@ private:
     IndexEntry& requireIndex(const std::string& indexName);
 
     Page loadPage(PageId id) const;
+    void persistPage(PageId id, const Page& page);
     void savePage(PageId id, const Page& page);
+    void commitHeapChange(PageId id, Page& page, WalRecordType type,
+                          const std::vector<uint8_t>& payload, bool needFpi);
+    bool heapNeedsFpi(const Page& page) const;
+    bool heapAlreadyApplied(PageId id, LSN lsn) const;
+    void applyWalRecord(const WalRecord& rec);
+    void applyHeapRedo(const WalRecord& rec);
     void saveBootstrap();
     void recoverFromWal();
     void checkpoint();
