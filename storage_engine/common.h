@@ -6,8 +6,10 @@
 inline constexpr uint32_t PAGE_SIZE = 8192;
 
 using PageId = uint32_t;
+using LSN = uint64_t;
 
 inline constexpr PageId INVALID_PAGE_ID = 0xFFFFFFFF;
+inline constexpr LSN INVALID_LSN = 0;
 
 // Magic numbers identify page kinds when we add catalog / free-list pages later.
 inline constexpr uint32_t FILE_HEADER_MAGIC = 0x41444231; // "ADB1"

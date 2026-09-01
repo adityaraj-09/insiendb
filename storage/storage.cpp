@@ -38,12 +38,8 @@ void Storage::recoverFromWal() {
     if (records.empty()) return;
 
     recovering = true;
-    for (auto& rec : records) {
-        if (rec.type == WalRecordType::PAGE_WRITE) {
-            disk.growToInclude(rec.pageId);
-            disk.writePage(rec.pageId, rec.page);
-        }
-    }
+    for (auto& rec : records)
+        applyWalRecord(rec);
     disk.fsync();
     recovering = false;
 
@@ -126,14 +122,106 @@ Page Storage::loadPage(PageId id) const {
     return page;
 }
 
+void Storage::persistPage(PageId id, const Page& page) {
+    if (id >= disk.pageCount())
+        disk.growToInclude(id);
+    disk.writePage(id, page);
+}
+
 void Storage::savePage(PageId id, const Page& page) {
     if (!recovering) {
         wal.appendPageWrite(id, page);
         wal.flush();
     }
+    persistPage(id, page);
+}
+
+bool Storage::heapNeedsFpi(const Page& page) const {
+    return HeapPage::pageLsn(page) <= wal.redoLsn();
+}
+
+void Storage::commitHeapChange(PageId id, Page& page, WalRecordType type,
+                               const std::vector<uint8_t>& payload, bool needFpi) {
+    if (!recovering) {
+        LSN lsn = wal.nextLsn();
+        HeapPage::setPageLsn(page, lsn);
+        wal.appendHeap(type, id, needFpi ? &page : nullptr, payload);
+        wal.flush();
+    }
+    persistPage(id, page);
+}
+
+bool Storage::heapAlreadyApplied(PageId id, LSN lsn) const {
     if (id >= disk.pageCount())
-        disk.growToInclude(id);
-    disk.writePage(id, page);
+        return false;
+    Page page = loadPage(id);
+    if (!HeapPage::isHeapPage(page))
+        return false;
+    return HeapPage::pageLsn(page) >= lsn;
+}
+
+void Storage::applyWalRecord(const WalRecord& rec) {
+    if (rec.type == WalRecordType::CHECKPOINT)
+        return;
+
+    if (rec.hasFpi()) {
+        if (rec.type != WalRecordType::PAGE_WRITE && heapAlreadyApplied(rec.pageId, rec.lsn))
+            return;
+        persistPage(rec.pageId, rec.page);
+        return;
+    }
+
+    if (rec.type == WalRecordType::PAGE_WRITE)
+        throw std::runtime_error("Storage: PAGE_WRITE record missing page image");
+
+    applyHeapRedo(rec);
+}
+
+void Storage::applyHeapRedo(const WalRecord& rec) {
+    if (rec.pageId >= disk.pageCount())
+        disk.growToInclude(rec.pageId);
+
+    Page page;
+    if (rec.type != WalRecordType::HEAP_INIT)
+        disk.readPage(rec.pageId, page);
+    else if (rec.pageId < disk.pageCount()) {
+        disk.readPage(rec.pageId, page);
+        if (HeapPage::isHeapPage(page) && HeapPage::pageLsn(page) >= rec.lsn)
+            return;
+        page.zero();
+    }
+
+    if (rec.type != WalRecordType::HEAP_INIT &&
+        HeapPage::isHeapPage(page) && HeapPage::pageLsn(page) >= rec.lsn)
+        return;
+
+    switch (rec.type) {
+        case WalRecordType::HEAP_INIT:
+            HeapPage::init(page);
+            break;
+        case WalRecordType::HEAP_INSERT: {
+            auto payload = decodeWalSlotRow(rec.payload);
+            HeapPage::applyLoggedInsert(page, payload.slot, payload.row.data(), payload.row.size());
+            break;
+        }
+        case WalRecordType::HEAP_DELETE:
+            HeapPage::remove(page, decodeWalSlot(rec.payload));
+            break;
+        case WalRecordType::HEAP_UPDATE: {
+            auto payload = decodeWalSlotRow(rec.payload);
+            if (!HeapPage::updateBytes(page, payload.slot, payload.row.data(), payload.row.size()))
+                throw std::runtime_error("Storage: HEAP_UPDATE redo failed");
+            break;
+        }
+        case WalRecordType::HEAP_SET_NEXT:
+            HeapPage::setNextPage(page, decodeWalPageId(rec.payload));
+            break;
+        default:
+            throw std::runtime_error("Storage: unexpected WAL record during heap redo");
+    }
+
+    HeapPage::setPageLsn(page, rec.lsn);
+    persistPage(rec.pageId, page);
 }
 
 PageId Storage::freelistPop() {
@@ -193,7 +281,8 @@ PageId Storage::allocateHeapPage() {
     PageId id = allocatePage();
     Page page;
     HeapPage::init(page);
-    savePage(id, page);
+    bool needFpi = heapNeedsFpi(page);
+    commitHeapChange(id, page, WalRecordType::HEAP_INIT, {}, needFpi);
     return id;
 }
 
@@ -257,11 +346,15 @@ PageId Storage::findLastPage(PageId firstPage) const {
 bool Storage::appendRowToChain(PageId& firstPage, const Row& row, RowId* outRid) {
     if (firstPage == 0) return false;
 
+    std::vector<uint8_t> encoded;
+    RowCodec::encodeRow(row, encoded);
+
     PageId lastId = findLastPage(firstPage);
     Page page = loadPage(lastId);
-
-    if (auto slot = HeapPage::insertRow(page, row)) {
-        savePage(lastId, page);
+    bool needFpi = heapNeedsFpi(page);
+    if (auto slot = HeapPage::insert(page, encoded.data(), encoded.size())) {
+        commitHeapChange(lastId, page, WalRecordType::HEAP_INSERT,
+                         encodeWalSlotRow(*slot, encoded.data(), encoded.size()), needFpi);
         if (outRid) {
             outRid->pageId = lastId;
             outRid->slotIndex = *slot;
@@ -270,14 +363,19 @@ bool Storage::appendRowToChain(PageId& firstPage, const Row& row, RowId* outRid)
     }
 
     PageId newId = allocateHeapPage();
+    bool needNextFpi = heapNeedsFpi(page);
+    HeapPage::setNextPage(page, newId);
+    commitHeapChange(lastId, page, WalRecordType::HEAP_SET_NEXT,
+                     encodeWalPageId(newId), needNextFpi);
+
     Page newPage = loadPage(newId);
-    auto slot = HeapPage::insertRow(newPage, row);
+    bool needInsertFpi = heapNeedsFpi(newPage);
+    auto slot = HeapPage::insert(newPage, encoded.data(), encoded.size());
     if (!slot.has_value())
         throw std::runtime_error("Storage: row too large to fit on an empty heap page");
 
-    HeapPage::setNextPage(page, newId);
-    savePage(lastId, page);
-    savePage(newId, newPage);
+    commitHeapChange(newId, newPage, WalRecordType::HEAP_INSERT,
+                     encodeWalSlotRow(*slot, encoded.data(), encoded.size()), needInsertFpi);
     if (outRid) {
         outRid->pageId = newId;
         outRid->slotIndex = *slot;
@@ -291,18 +389,29 @@ PageId Storage::writeRowsToNewChain(const std::vector<Row>& rows) {
     Page page = loadPage(currentId);
 
     for (const Row& row : rows) {
-        if (!HeapPage::insertRow(page, row).has_value()) {
-            savePage(currentId, page);
-            PageId newId = allocateHeapPage();
-            HeapPage::setNextPage(page, newId);
-            savePage(currentId, page);
-            currentId = newId;
-            page = loadPage(currentId);
-            if (!HeapPage::insertRow(page, row).has_value())
-                throw std::runtime_error("Storage: row too large to fit on an empty heap page");
+        std::vector<uint8_t> encoded;
+        RowCodec::encodeRow(row, encoded);
+        bool needFpi = heapNeedsFpi(page);
+        if (auto slot = HeapPage::insert(page, encoded.data(), encoded.size())) {
+            commitHeapChange(currentId, page, WalRecordType::HEAP_INSERT,
+                             encodeWalSlotRow(*slot, encoded.data(), encoded.size()), needFpi);
+            continue;
         }
+
+        PageId newId = allocateHeapPage();
+        bool needNextFpi = heapNeedsFpi(page);
+        HeapPage::setNextPage(page, newId);
+        commitHeapChange(currentId, page, WalRecordType::HEAP_SET_NEXT,
+                         encodeWalPageId(newId), needNextFpi);
+        currentId = newId;
+        page = loadPage(currentId);
+        needFpi = heapNeedsFpi(page);
+        auto slot = HeapPage::insert(page, encoded.data(), encoded.size());
+        if (!slot.has_value())
+            throw std::runtime_error("Storage: row too large to fit on an empty heap page");
+        commitHeapChange(currentId, page, WalRecordType::HEAP_INSERT,
+                         encodeWalSlotRow(*slot, encoded.data(), encoded.size()), needFpi);
     }
-    savePage(currentId, page);
     return firstPage;
 }
 
@@ -382,10 +491,13 @@ bool Storage::updateRow(const std::string& tableName, RowId rid, Row newRow) {
         return false;
 
     Page page = loadPage(rid.pageId);
+    bool needFpi = heapNeedsFpi(page);
     if (!HeapPage::updateRow(page, rid.slotIndex, newRow))
         throw std::runtime_error("Storage: updated row too large to fit on heap page");
 
-    savePage(rid.pageId, page);
+    auto bytes = HeapPage::getRowBytes(page, rid.slotIndex);
+    commitHeapChange(rid.pageId, page, WalRecordType::HEAP_UPDATE,
+                     encodeWalSlotRow(rid.slotIndex, bytes.data(), bytes.size()), needFpi);
     maintainIndexesOnUpdate(tableName, oldRow, newRow, rid);
     return true;
 }
@@ -397,10 +509,12 @@ bool Storage::deleteRow(const std::string& tableName, RowId rid) {
         return false;
 
     Page page = loadPage(rid.pageId);
+    bool needFpi = heapNeedsFpi(page);
     if (!HeapPage::remove(page, rid.slotIndex))
         return false;
 
-    savePage(rid.pageId, page);
+    commitHeapChange(rid.pageId, page, WalRecordType::HEAP_DELETE,
+                     encodeWalSlot(rid.slotIndex), needFpi);
     maintainIndexesOnDelete(tableName, oldRow, rid);
     return true;
 }

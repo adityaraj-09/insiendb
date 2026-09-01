@@ -26,10 +26,11 @@ public:
     static constexpr size_t SLOT_SIZE   = 4;
 
     // Header field offsets
-    static constexpr size_t OFF_MAGIC       = 0;  // u32
+    static constexpr size_t OFF_MAGIC         = 0;  // u32
     static constexpr size_t OFF_NUM_SLOTS     = 4;  // u16
     static constexpr size_t OFF_DATA_END      = 6;  // u16 — next free byte in data area
-    static constexpr size_t OFF_NEXT_PAGE     = 8;  // u32 — 0 = end of table's heap chain (6b)
+    static constexpr size_t OFF_NEXT_PAGE     = 8;  // u32 — 0 = end of table's heap chain
+    static constexpr size_t OFF_PAGE_LSN      = 12; // u32 — last WAL LSN that modified this page
 
     // Initialize an empty heap page (call on a zeroed Page buffer).
     static void init(Page& page);
@@ -38,6 +39,13 @@ public:
 
     static PageId nextPage(const Page& page);
     static void setNextPage(Page& page, PageId next);
+
+    static LSN pageLsn(const Page& page);
+    static void setPageLsn(Page& page, LSN lsn);
+
+    // Redo helpers used during WAL recovery (idempotent where possible).
+    static void applyLoggedInsert(Page& page, uint16_t slotIndex,
+                                  const uint8_t* rowBytes, size_t rowLen);
 
     // Insert serialized row bytes. Returns slot index, or nullopt if full.
     static std::optional<uint16_t> insert(Page& page, const uint8_t* rowBytes, size_t rowLen);
