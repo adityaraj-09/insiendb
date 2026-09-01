@@ -307,9 +307,9 @@ static void testWalLsnSurvivesCheckpoint() {
     {
         Storage storage;
         storage.openDatabase(path);
-        CHECK(storage.walRedoLsn() > 0);
-        CHECK(storage.walNextLsn() == lsnAfterCreate);
-        CHECK(storage.walNextLsn() > storage.walRedoLsn());
+        // close() wrote a CHECKPOINT at lsnAfterCreate; LSNs are not reset.
+        CHECK(storage.walRedoLsn() == lsnAfterCreate);
+        CHECK(storage.walNextLsn() == lsnAfterCreate + 1);
         storage.closeDatabase();
     }
 
